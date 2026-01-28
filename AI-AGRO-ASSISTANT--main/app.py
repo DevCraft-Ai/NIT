@@ -407,41 +407,72 @@ def predict():
     if file.filename == '':
         return jsonify({"error": "No file selected"}), 400
 
+    source = request.form.get("source", "upload") # 'upload' or 'camera'
+    is_brief = request.form.get("brief", "false").lower() == "true"
+
     try:
         image_bytes = file.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        prompt_text = """
-        You are an expert agricultural scientist for Indian farming conditions. Analyze the provided plant leaf image and generate a complete, practical farming guide.
-        Your entire output must be a single block of human-readable plain text. Do NOT use JSON or markdown formatting.
-        Use the exact headings provided below, each on a new line, to structure your response.
+        prompt_text = f"""
+        You are an advanced AI Crop Disease Prediction Engine.
+        Analyze the provided leaf image and generate a structured, farmer-friendly diagnosis report.
+        
+        { "SOURCE: Analyzed using live camera image" if source == "camera" else "" }
+        
+        GENERAL RULES:
+        - Output must be clean, readable plain text.
+        - NO JSON, no markdown symbols (no asterisks, no hashes, no backticks).
+        - Use simple, professional, and practical language.
+        - Default language is English.
+        - Be short, sweet, and confident.
+        - End with: "This problem is common and controllable. Timely action will protect your crop."
 
-        ### DISEASE ANALYSIS ###
-        - Identify the disease on the leaf. If healthy, state "The leaf appears to be healthy."
-        - Provide 3 clear, step-by-step remedies for the disease.
+        { "MODE: BRIEF MODE. Show ONLY: Disease Name, Severity, What to Do Today, Medicine Name." if is_brief else "MODE: FULL ANALYSIS" }
 
-        ### HEALTHY LEAF TIPS ###
-        - If the leaf is healthy, provide 3 practical care tips for the plant. If it is diseased, skip this section entirely.
-        
-        ### SOIL SUITABILITY ###
-        - Describe the ideal soil type for this plant (e.g., Loamy, Sandy, Clay).
-        - State the optimal soil pH range (e.g., 6.0-7.0).
+        OUTPUT STRUCTURE (Use these exact headings in order):
 
-        ### WATERING GUIDE ###
-        - Provide a clear watering schedule (e.g., "Water deeply once a week, more in summer.").
-        - Mention a simple method to check for soil moisture.
-        
-        ### FERTILIZER RECOMMENDATION ###
-        - Suggest a suitable NPK ratio (e.g., 10-10-10) or type of organic manure.
-        - Specify when and how often to apply the fertilizer.
-        
-        ### PEST CONTROL ###
-        - List 2-3 common pests that affect this plant.
-        - For each pest, suggest one organic and one chemical control method.
-        
-        ### PLANTING GUIDE ###
-        - Recommend the ideal spacing between individual plants.
-        - Suggest the proper planting depth for seeds or saplings.
+        CROP IDENTIFICATION
+        - Crop name
+        - Confidence: High / Medium / Low
+
+        LEAF CONDITION
+        - Healthy / Disease Detected / Pest Attack / Nutrient Deficiency
+
+        DISEASE ANALYSIS
+        - Disease name
+        - Category: Fungal / Bacterial / Viral / Pest / Nutrient
+        - Stage: Early / Moderate / Severe
+
+        PRIORITY STATUS
+        🟢 Normal – no action needed (Use only if Healthy)
+        🟡 Watch – monitor closely (Use for Early stage or minor issues)
+        🔴 Urgent – treat immediately (Use for Moderate/Severe or high risk)
+
+        WHY THIS PROBLEM OCCURRED
+        - Briefly explain (Weather, Watering, Soil, or Pest reason).
+
+        KEY ACTION BLOCK
+        Disease Name:
+        Severity:
+        What to Do Today:
+        Medicine Name:
+
+        TREATMENT GUIDANCE
+        Organic Treatment:
+        - Remedy and Dosage.
+        Chemical Treatment:
+        - Indian medicine name, Dosage, and Spray interval.
+
+        DO NOT DO
+        - Common mistakes to avoid.
+
+        RECOVERY & PREVENTION
+        - Expected recovery time and signs of improvement.
+        - Simple prevention tips.
+
+        FINAL SHORT ADVICE
+        - 1–2 sentences of reassurance.
         """
 
         completion = client.chat.completions.create(
@@ -470,6 +501,84 @@ def predict():
     except Exception as e:
         print(f"PREDICTION ERROR: {e}")
         return jsonify({"error": f"An unexpected error occurred on the server: {e}"}), 500
+
+@app.route("/translate-report", methods=["POST"])
+def translate_report():
+    """Translates the analysis report text into the target language."""
+    try:
+        data = request.get_json()
+        text = data.get("text", "")
+        target_lang = data.get("language", "English") # Tamil, Hindi, English
+
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
+
+        prompt = f"""
+        Translate the following Crop Disease Analysis report into {target_lang}.
+        Maintain the "Govt agriculture style" and farmer-friendly tone.
+        Ensure all technical terms are explained simply.
+        Do not change the meaning or the structure of the report.
+        Keep the original headings but translated.
+        Output only the translated text, no other comments.
+
+        Report Text:
+        {text}
+        """
+
+        completion = client.chat.completions.create(
+            model=TEXT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2048,
+        )
+
+        translated_text = completion.choices[0].message.content
+        return jsonify({"translated_text": translated_text})
+
+    except Exception as e:
+        print(f"TRANSLATION ERROR: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/ask-leaf-followup", methods=["POST"])
+def ask_leaf_followup():
+    """Handles follow-up questions related to the analyzed leaf."""
+    try:
+        data = request.get_json()
+        question = data.get("question", "")
+        report_context = data.get("report", "")
+
+        if not question or not report_context:
+            return jsonify({"error": "Missing question or report context"}), 400
+
+        prompt = f"""
+        The user has a follow-up question about their plant which was just analyzed.
+        Original Analysis:
+        {report_context}
+
+        User Question:
+        {question}
+
+        RULES:
+        - Answer ONLY related to this leaf & original result.
+        - Keep answers short and practical.
+        - Do not repeat the full report.
+        - Be supportive and clear.
+        - If the question is unrelated, politely redirect to the report.
+        """
+
+        completion = client.chat.completions.create(
+            model=TEXT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=512,
+        )
+
+        answer = completion.choices[0].message.content
+        return jsonify({"answer": answer})
+
+    except Exception as e:
+        print(f"FOLLOWUP ERROR: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/weather", methods=["GET"])
 def weather():
