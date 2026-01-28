@@ -160,7 +160,7 @@ def voice_intelligence():
     try:
         data = request.get_json()
         transcript = data.get("transcript", "").strip()
-        
+                
         if not transcript:
             return jsonify({"error": "No transcript provided."}), 400
 
@@ -563,23 +563,54 @@ def weather():
         weather_data['lat'] = lat
         weather_data['lon'] = lon
 
-        # --- NEW: Weather Intelligence Add-ons ---
+        # --- NEW: Ultimate Weather Intelligence Overhaul (V5) ---
         current_hour = datetime.now().hour
         is_night = current_hour < 6 or current_hour > 18
         
+        # Calculate Moon Phase (Simplified approximation 0-1)
+        # 0 = New Moon, 0.25 = First Quarter, 0.5 = Full Moon, 0.75 = Last Quarter
+        def get_moon_phase(d):
+            diff = d - datetime(2001, 1, 1)
+            days = diff.days + diff.seconds / 86400.0
+            lunations = 0.20439731 + (days * 0.03386319269)
+            return lunations % 1.0
+
+        moon_phase_val = get_moon_phase(datetime.now())
+        moon_phase_name = "New Moon" if moon_phase_val < 0.06 or moon_phase_val > 0.94 else \
+                          "Waxing Crescent" if moon_phase_val < 0.25 else \
+                          "First Quarter" if moon_phase_val < 0.31 else \
+                          "Waxing Gibbous" if moon_phase_val < 0.5 else \
+                          "Full Moon" if moon_phase_val < 0.56 else \
+                          "Waning Gibbous" if moon_phase_val < 0.75 else \
+                          "Last Quarter" if moon_phase_val < 0.81 else "Waning Crescent"
+
         humidity = weather_data['current'].get('humidity', 0)
         temp = weather_data['current'].get('temp', 0)
         dew_point = weather_data['current'].get('dew_point', temp - ((100 - humidity) / 5))
+        visibility = weather_data['current'].get('visibility', 10000) / 1000 # km
+        
         temp_diff = abs(temp - dew_point)
         fog_prob = 0
         if temp_diff < 3:
             fog_prob = min(90, (100 - (temp_diff * 30)) * (humidity / 100))
         
+        # Frost Risk Calculation
+        frost_risk = "None"
+        if temp < 4 and temp_diff < 2: frost_risk = "Low"
+        if temp < 2: frost_risk = "Moderate"
+        if temp < 0: frost_risk = "High"
+
         weather_data['intelligence'] = {
             "is_night": is_night,
             "fog_probability": f"{int(max(0, fog_prob))}%",
             "night_temp_drop": f"{int(weather_data['daily'][0]['temp'].get('day', 0) - weather_data['daily'][0]['temp'].get('night', -5))}°C",
-            "uv_risk_level": "Low" if weather_data['current'].get('uvi', 0) < 3 else "Moderate" if weather_data['current'].get('uvi', 0) < 6 else "High"
+            "uv_risk_level": "Low" if weather_data['current'].get('uvi', 0) < 3 else "Moderate" if weather_data['current'].get('uvi', 0) < 6 else "High",
+            "moon_phase": moon_phase_name,
+            "moon_phase_val": round(moon_phase_val, 2),
+            "visibility_km": f"{round(visibility, 1)}km",
+            "dew_point_c": f"{round(dew_point, 1)}°C",
+            "frost_risk": frost_risk,
+            "cloud_cover": f"{weather_data['current'].get('clouds', 0)}%"
         }
 
         return jsonify(weather_data)
