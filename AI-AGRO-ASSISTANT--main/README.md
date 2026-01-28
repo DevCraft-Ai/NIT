@@ -1,3 +1,4 @@
+hello wordl
 🌿 AI Agri Assistant
 An intelligent, full-stack web application designed to be a modern farmer's digital companion. AI Agri Assistant leverages the power of AI and real-time data to provide crucial insights, from crop disease detection to market price analysis, helping farmers make informed decisions and improve productivity.
 
