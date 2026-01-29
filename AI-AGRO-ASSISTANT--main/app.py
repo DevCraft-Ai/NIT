@@ -357,7 +357,7 @@ def get_items():
     if not db:
         return jsonify({"error": "Database not initialized"}), 500
     try:
-        products_ref = db.collection('products').stream()
+        products_ref = db.collection('products').limit(100).get()
         products_list = []
         for doc in products_ref:
             product_data = doc.to_dict()
