@@ -10,7 +10,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime, timedelta 
 from dotenv import load_dotenv
-from groq import Groq
+import google.generativeai as genai
 from googleapiclient.discovery import build    
     
    
@@ -20,8 +20,8 @@ app = Flask(__name__)
 CORS(app)           
  
  
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=GROQ_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 DATA_GOV_API_KEY = os.getenv("DATA_GOV_API_KEY")
@@ -65,11 +65,11 @@ except json.JSONDecodeError:
     print("ERROR: Could not decode prices.json. Check syntax.")
 
 
-TEXT_MODEL = "openai/gpt-oss-120b"
-VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+TEXT_MODEL = "models/gemini-2.5-flash"
+VISION_MODEL = "models/gemini-2.5-flash"
 
 
-# --- NEW --- This is the helper function from your friend's code to find an image
 def get_image_url_from_google(query):
     """Searches for an image using Google Custom Search API and returns the first result."""
     try:
@@ -94,6 +94,45 @@ def get_image_url_from_google(query):
         print(f"ERROR during Google Image Search: {e}")
         return None
 
+def get_price_info_from_google(vegetable, location):
+    """Searches for vegetable prices using Google Custom Search API and returns snippets."""
+    try:
+        if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_ID:
+            print("WARNING: Google CSE API Key or ID is not set. Cannot search for price info.")
+            return None
+            
+        service = build("customsearch", "v1", developerKey=GOOGLE_CSE_API_KEY)
+        query = f"current market price of {vegetable} in {location} India today"
+        res = service.cse().list(
+            q=query,
+            cx=GOOGLE_CSE_ID,
+            num=3
+        ).execute()
+
+        snippets = []
+        if 'items' in res:
+            for item in res['items']:
+                snippets.append(item.get('snippet', ''))
+        
+        return " | ".join(snippets) if snippets else None
+    except Exception as e:
+        print(f"ERROR during Google Price Search: {e}")
+        return None
+
+
+def extract_json(text):
+    """Extracts a JSON object from a string that might contain markdown backticks or extra text."""
+    try:
+        # Look for the first '{' and last '}'
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            json_str = text[start:end+1]
+            return json.loads(json_str)
+        return json.loads(text) # Fallback to direct parse
+    except Exception as e:
+        print(f"JSON EXTRACTION ERROR: {e}. Text: {text[:200]}...")
+        raise e
 
 @app.route("/")
 def index():
@@ -107,7 +146,7 @@ def buyer_page():
 
 @app.route("/ask-agro-assistant", methods=["POST"])
 def ask_agro_assistant():
-    """Handles chatbot queries using the Groq API."""
+    """Handles chatbot queries using the Gemini API."""
     try:
 
         data = request.get_json()
@@ -134,20 +173,15 @@ def ask_agro_assistant():
         Based on this information, please answer the user's question. If the question is unrelated to the Agro Assistant application or its features, politely state that you can only answer questions about the application.
         """
 
-        if not GROQ_API_KEY:
-            return jsonify({"error": "Groq API Key is missing in .env file."}), 500
+        if not GEMINI_API_KEY:
+            return jsonify({"error": "Gemini API Key is missing in .env file."}), 500
 
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ],
-            temperature=0.7,
-            max_tokens=1024,
+        model = genai.GenerativeModel(TEXT_MODEL)
+        response = model.generate_content(
+            f"System Prompt: {system_prompt}\n\nUser Question: {user_question}"
         )
         
-        result_text = completion.choices[0].message.content
+        result_text = response.text
         return jsonify({"answer": result_text})
 
     except Exception as e:
@@ -156,7 +190,7 @@ def ask_agro_assistant():
 
 @app.route("/voice-intelligence", methods=["POST"])
 def voice_intelligence():
-    """Processes voice transcripts using Groq for intent parsing and AI responses."""
+    """Processes voice transcripts using Gemini for intent parsing and AI responses."""
     try:
         data = request.get_json()
         transcript = data.get("transcript", "").strip()
@@ -219,28 +253,22 @@ def voice_intelligence():
         - AI: {"type": "answer", "answer": "To manage tomato pests, use neem oil spray or organic soap water...", "speech": "You can manage tomato pests by using neem oil spray or organic soap water. I've sent the full details to the chat."}
         """
 
-        if not GROQ_API_KEY:
+        if not GEMINI_API_KEY:
             if fallback: return jsonify(fallback)
-            return jsonify({"type": "answer", "answer": "Groq API Key missing in .env.", "speech": "I am missing the Groq API key."}), 500
+            return jsonify({"type": "answer", "answer": "Gemini API Key missing in .env.", "speech": "I am missing the Gemini API key."}), 500
 
-        # Try Groq
+        # Try Gemini
         try:
-            completion = client.chat.completions.create(
-                model=TEXT_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"User Transcript: {transcript}"}
-                ],
-                temperature=0.1, # Keep it strict for command parsing
-                max_tokens=512,
-                response_format={"type": "json_object"}
+            model = genai.GenerativeModel(TEXT_MODEL)
+            response = model.generate_content(
+                f"System Prompt: {system_prompt}\n\nUser Transcript: {transcript}"
             )
             
-            result_json = completion.choices[0].message.content
-            return jsonify(json.loads(result_json))
+            result_json = response.text
+            return jsonify(extract_json(result_json))
 
         except Exception as e:
-            print(f"Groq Fetch Exception: {e}")
+            print(f"Gemini Fetch Exception: {e}")
             if fallback: 
                 fallback["answer"] = "(Safe Mode) " + fallback["answer"]
                 return jsonify(fallback), 200
@@ -248,7 +276,7 @@ def voice_intelligence():
 
     except Exception as e:
         print(f"VOICE INTEL ERROR: {e}")
-        return jsonify({"type": "answer", "answer": f"Something went wrong while connecting to Groq: {str(e)}", "speech": "I am having trouble connecting to my brain right now."}), 500
+        return jsonify({"type": "answer", "answer": f"Something went wrong while connecting to Gemini: {str(e)}", "speech": "I am having trouble connecting to my brain right now."}), 500
 
 @app.route("/explain-results", methods=["POST"])
 def explain_results():
@@ -265,22 +293,17 @@ def explain_results():
         The goal is to explain the most important details (e.g., temperature, rain chances, or market prices) out loud.
         """
 
-        if not GROQ_API_KEY:
+        if not GEMINI_API_KEY:
             return jsonify({"explanation": f"Here is the {context_type} information. (AI summary unavailable)"})
 
-        # Try Groq
+        
         try:
-            completion = client.chat.completions.create(
-                model=TEXT_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Raw Data: {json.dumps(raw_data)}"}
-                ],
-                temperature=0.7,
-                max_tokens=1024,
+            model = genai.GenerativeModel(TEXT_MODEL)
+            response = model.generate_content(
+                f"System Prompt: {system_prompt}\n\nRaw Data: {json.dumps(raw_data)}"
             )
             
-            explanation = completion.choices[0].message.content
+            explanation = response.text
             return jsonify({"explanation": explanation})
         except Exception as e:
             print(f"Explain Results Exception: {e}")
@@ -320,14 +343,11 @@ def upload_profile_image():
     if file:
         try:
             print("INFO: Uploading file to Cloudinary...")
-            # Upload the file to Cloudinary in a specific folder for profiles
             upload_result = cloudinary.uploader.upload(file, folder="agro_assistant_profiles")
             
-            # Get the secure URL of the uploaded image
             secure_url = upload_result.get('secure_url')
             print(f"SUCCESS: Cloudinary URL is {secure_url}")
 
-            # Return the URL to the frontend
             return jsonify({'message': 'Image uploaded successfully', 'secure_url': secure_url}), 200
 
         except Exception as e:
@@ -475,27 +495,13 @@ def predict():
         - 1–2 sentences of reassurance.
         """
 
-        completion = client.chat.completions.create(
-            model=VISION_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}",
-                            },
-                        },
-                    ],
-                }
-            ],
-            temperature=0.1,
-            max_tokens=2048,
-        )
+        model = genai.GenerativeModel(VISION_MODEL)
+        response = model.generate_content([
+            prompt_text,
+            {"mime_type": "image/jpeg", "data": image_bytes}
+        ])
 
-        prediction_report_text = completion.choices[0].message.content
+        prediction_report_text = response.text
         return jsonify({"prediction_text": prediction_report_text})
 
     except Exception as e:
@@ -525,14 +531,10 @@ def translate_report():
         {text}
         """
 
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2048,
-        )
+        model = genai.GenerativeModel(TEXT_MODEL)
+        response = model.generate_content(prompt)
 
-        translated_text = completion.choices[0].message.content
+        translated_text = response.text
         return jsonify({"translated_text": translated_text})
 
     except Exception as e:
@@ -566,14 +568,10 @@ def ask_leaf_followup():
         - If the question is unrelated, politely redirect to the report.
         """
 
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=512,
-        )
+        model = genai.GenerativeModel(TEXT_MODEL)
+        response = model.generate_content(prompt)
 
-        answer = completion.choices[0].message.content
+        answer = response.text
         return jsonify({"answer": answer})
 
     except Exception as e:
@@ -672,12 +670,10 @@ def weather():
         weather_data['lat'] = lat
         weather_data['lon'] = lon
 
-        # --- NEW: Ultimate Weather Intelligence Overhaul (V5) ---
         current_hour = datetime.now().hour
         is_night = current_hour < 6 or current_hour > 18
         
-        # Calculate Moon Phase (Simplified approximation 0-1)
-        # 0 = New Moon, 0.25 = First Quarter, 0.5 = Full Moon, 0.75 = Last Quarter
+
         def get_moon_phase(d):
             diff = d - datetime(2001, 1, 1)
             days = diff.days + diff.seconds / 86400.0
@@ -802,31 +798,17 @@ def weather_intelligence():
         weather_info = data.get("weather", {})
         city = data.get("city", "Unknown Location")
 
-        if not GROQ_API_KEY:
+        if not GEMINI_API_KEY:
             return jsonify({"error": "AI Engine unavailable"}), 500
 
-        prompt = f"""
-        You are an Advanced Weather Intelligence AI. Analyze this weather data for {city}:
-        Data: {json.dumps(weather_info)}
-
-        Provide a human-friendly response in the following JSON format:
-        {{
-            "summary": "A concise, conversational 2-sentence summary of the weather.",
-            "what_to_wear": "Specific clothing suggestions (e.g., 'Carry an umbrella', 'Wear light cotton').",
-            "health_tips": "Health/Safety advice based on AQI or UV (e.g., 'Use sunscreen', 'Stay hydrated').",
-            "agri_impact": "How this weather affects farmers today (e.g., 'Good for sowing', 'Risk of pests due to humidity').",
-            "fun_fact": "A quick educational fact about one of the current weather conditions."
-        }}
-        """
-
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            response_format={"type": "json_object"}
+        model = genai.GenerativeModel(
+            TEXT_MODEL,
+            generation_config={"response_mime_type": "application/json"}
         )
-
-        return jsonify(json.loads(completion.choices[0].message.content))
+        response = model.generate_content(prompt)
+        
+        # Use extraction helper
+        return jsonify(extract_json(response.text))
 
     except Exception as e:
         print(f"WEATHER INTEL ERROR: {e}")
@@ -868,41 +850,42 @@ def prices():
                 }
                 return jsonify(result)
     except requests.exceptions.RequestException as e:
-        print(f"WARNING: Real-time API request failed: {e}. Proceeding to AI fallback.")
+        print(f"WARNING: Real-time API request failed: {e}. Proceeding to fallback.")
         pass
 
+    # Step 2: Fallback to Google Search + Gemini AI
     try:
-        print("INFO: Real-time price not found. Using Groq AI for estimation...")
+        print(f"INFO: Gov API failed. Attempting Google Search fallback for {vegetable_query} in {location_query}...")
+        search_snippets = get_price_info_from_google(vegetable_query, location_query)
+        
         prompt = f"""
         As an agricultural market expert, provide a single, average estimated market price for '{vegetable_query}' in the '{location_query}' region of India.
+        
+        Context from web search:
+        {search_snippets if search_snippets else "No recent search data available."}
+
         Your entire response MUST be only a single, valid JSON object with no markdown or any other text.
         Use this exact structure: {{"estimated_price": "Approx. ₹Z per Kg"}}
         """
         
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
+        model = genai.GenerativeModel(TEXT_MODEL)
+        response = model.generate_content(prompt)
 
-        cleaned_text = completion.choices[0].message.content
-        price_data = json.loads(cleaned_text)
+        price_data = extract_json(response.text)
+        estimated_price = price_data.get("estimated_price", "Could not estimate.")
         estimated_price = price_data.get("estimated_price", "Could not estimate.")
 
-        print(f"SUCCESS: AI estimated price: {estimated_price}")
+        print(f"SUCCESS: AI estimated price (via Search): {estimated_price}")
         result = {
             "prices": [{
                 "name": vegetable_query.title(),
                 "location": location_query.title(),
-                "price": f"{estimated_price} (Estimated)"
+                "price": f"{estimated_price} (Market Search)"
             }]
         }
         return jsonify(result)
     except Exception as e:
-        print(f"ERROR: Both real-time API and AI fallback failed. Error: {e}")
+        print(f"ERROR: Both Gov API and Google fallback failed. Error: {e}")
         return jsonify({"error": f"Sorry, could not find or estimate the price for {vegetable_query}."}), 500
 
 @app.route("/vegetable-info", methods=["GET"])
@@ -935,17 +918,13 @@ def vegetable_info():
         }}
         """
 
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3, # A bit more creative for descriptions
-            response_format={"type": "json_object"}
+        model = genai.GenerativeModel(
+            TEXT_MODEL,
+            generation_config={"response_mime_type": "application/json"}
         )
+        response = model.generate_content(prompt)
 
-        ai_data_text = completion.choices[0].message.content
-        veg_data = json.loads(ai_data_text)
+        veg_data = extract_json(response.text)
         
         # --- MODIFIED SECTION ---
         # This part now uses the Google Search function to find a reliable image.
@@ -1025,20 +1004,47 @@ def planner():
       }}
     }}
     """
+    if not GEMINI_API_KEY:
+        print("ERROR: GEMINI_API_KEY is missing!")
+        return jsonify({"error": "AI configuration error. Please contact support."}), 500
+
     try:
-        completion = client.chat.completions.create(
-            model=TEXT_MODEL,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            response_format={"type": "json_object"}
-        )
-        plan_data_string = completion.choices[0].message.content
-        return jsonify(json.loads(plan_data_string))
+        # DEBUG: Log the inputs
+        print(f"DEBUG: AI Planner Inputs - Crop: {crop}, Area: {area}, Location: {location}")
+        
+        model = genai.GenerativeModel(TEXT_MODEL)
+        print(f"INFO: Generating plan using {TEXT_MODEL}...")
+        
+        try:
+            response = model.generate_content(prompt)
+        except Exception as api_e:
+            print(f"API CALL ERROR: {api_e}")
+            raise api_e
+
+        # DEBUG: Detailed Logging of response
+        if not response.candidates:
+            feedback = getattr(response, 'prompt_feedback', 'No feedback available')
+            print(f"ERROR: No response candidates. Feedback: {feedback}")
+            return jsonify({"error": "AI could not generate this plan. This might be due to safety filters. Please try with different phrasing."}), 500
+
+        raw_text = response.text
+        if not raw_text:
+            print("ERROR: AI returned empty text.")
+            return jsonify({"error": "AI returned an empty response. Please try again."}), 500
+            
+        print(f"DEBUG: AI Raw Text Received (Length: {len(raw_text)})")
+        result = extract_json(raw_text)
+        return jsonify(result)
     except Exception as e:
-        print(f"PLANNER ERROR: {e}")
-        return jsonify({"error": f"Failed to generate plan: {e}"}), 500
+        import traceback
+        error_msg = str(e)
+        print(f"PLANNER ERROR: {error_msg}")
+        traceback.print_exc()
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            return jsonify({"error": "AI Quota Exceeded. Google limits free use. Please wait 1-2 minutes and try again."}), 429
+            
+        return jsonify({"error": f"Internal Server Error: {error_msg}"}), 500
 
 if __name__ == "__main__":
     print("Starting Flask server...")
