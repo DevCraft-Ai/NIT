@@ -10,6 +10,10 @@
     <!-- PDF Generation Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        // Prevent ReferenceError: App is not defined if elements are clicked during load
+        window.App = { launchImmersiveMode: function () { console.warn('App not fully loaded yet...'); } };
+    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
 
@@ -4083,6 +4087,25 @@
         }
 
         /* --- AI PLANNER ENHANCEMENTS --- */
+        .planner-output-container {
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        #planner-output {
+            display: block;
+            width: 100%;
+            min-height: 50px;
+        }
+
+        #planner-output:not(:empty) {
+            padding: 25px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid var(--primary-color);
+            border-radius: 12px;
+            box-shadow: 0 0 20px var(--primary-glow);
+        }
+
         .planner-result-box {
             background: rgba(0, 0, 0, 0.8) !important;
             border: 2px solid var(--primary-color) !important;
@@ -4317,6 +4340,23 @@
 
     <div id="loading-overlay">
         <div class="spinner"></div>
+    </div>
+
+    <!-- Fullscreen Launch Overlay for Better Experience -->
+    <div id="fullscreen-launch-overlay" style="display: none;">
+        <div class="radar-scanner"></div>
+        <i class="fas fa-leaf" style="font-size: 5rem; animation: pulse 2s infinite;"></i>
+        <h1 style="font-size: 2.5rem; margin-top: 30px; letter-spacing: 3px;">🌿 AI AGRO ASSISTANT</h1>
+        <p style="opacity: 0.7; max-width: 400px; margin-top: 15px;">Experience the future of smart farming with our
+            AI-powered agricultural assistant</p>
+        <button class="launch-btn" onclick="App.launchImmersiveMode()">
+            <i class="fas fa-expand"></i> LAUNCH FULL EXPERIENCE
+        </button>
+        <button
+            style="margin-top: 15px; background: transparent; border: 1px solid var(--primary-color); color: var(--primary-color); padding: 10px 30px; border-radius: 25px; cursor: pointer;"
+            onclick="App.skipFullscreen()">
+            Skip for now
+        </button>
     </div>
 
     <div class="sidebar">
@@ -4684,7 +4724,9 @@
 
                 <button onclick="App.getPlan()">💡 Get Perfect Plan</button>
 
-                <div id="planner-output" class="result-box planner-result-box"></div>
+                <div class="planner-output-container">
+                    <div id="planner-output" class="result-box planner-result-box"></div>
+                </div>
 
                 <div class="planner-news-section">
                     <h3><i class="fas fa-newspaper"></i> Agri-Planning Intelligence</h3>
@@ -4869,7 +4911,7 @@
     <script type="text/javascript"
         src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
     <script>
-        const App = {
+        window.App = {
             API_BASE_URL: 'http://127.0.0.1:5000',
             services: { auth: null, db: null, storage: null },
             newsLoaded: false,
@@ -4898,20 +4940,7 @@
                 { code: 'en', name: 'English' },
                 { code: 'ta', name: 'Tamil' },
                 { code: 'hi', name: 'Hindi' },
-                { code: 'te', name: 'Telugu' },
-                { code: 'kn', name: 'Kannada' },
-                { code: 'ml', name: 'Malayalam' },
-                { code: 'mr', name: 'Marathi' },
-                { code: 'gu', name: 'Gujarati' },
-                { code: 'bn', name: 'Bengali' },
-                { code: 'pa', name: 'Punjabi' },
-                { code: 'ur', name: 'Urdu' },
-                { code: 'fr', name: 'French' },
-                { code: 'de', name: 'German' },
-                { code: 'es', name: 'Spanish' },
-                { code: 'zh-CN', name: 'Chinese' },
-                { code: 'ja', name: 'Japanese' },
-                { code: 'ar', name: 'Arabic' }
+                { code: 'te', name: 'Telugu' }
             ],
 
             init: function () {
@@ -5160,6 +5189,11 @@
                     }
 
                     this.fetchSidebarWeather();
+
+                    // Show fullscreen prompt for better experience
+                    setTimeout(() => {
+                        this.showFullscreenPrompt();
+                    }, 500);
                 } else { // User is logged out
                     loginLink.style.display = 'flex';
                     logoutLink.style.display = 'none';
@@ -6457,58 +6491,111 @@
                     return;
                 }
 
+                const btn = event?.target || document.querySelector('button[onclick*="getPlan"]');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+                }
+
                 this.showLoadingOverlay(true);
 
                 try {
-                    const response = await fetch(`${this.API_BASE_URL}/planner?crop=${encodeURIComponent(crop)}&area=${encodeURIComponent(area)}&location=${encodeURIComponent(location)}`);
+                    // Optimized fetch with timeout
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minute timeout
+
+                    const response = await fetch(`${this.API_BASE_URL}/planner?crop=${encodeURIComponent(crop)}&area=${encodeURIComponent(area)}&location=${encodeURIComponent(location)}`, {
+                        signal: controller.signal
+                    });
+
+                    clearTimeout(timeoutId);
 
                     if (!response.ok) {
                         const err = await response.json();
-                        throw new Error(err.error || 'Failed to generate plan.');
+                        throw new Error(err.error || 'The AI is currently busy. Please try again in a moment.');
                     }
 
                     const data = await response.json();
 
+                    if (!data || !data.plan_summary) {
+                        throw new Error('AI returned an unexpected format. Please try again.');
+                    }
+
+                    // CLEAR OLD OUTPUT BEFORE SHOWING NEW
+                    outputDiv.innerHTML = '';
+
                     let htmlResult = `
-            <div style="text-align: left;">
-                <h3>${data.plan_summary.title}</h3>
-                <p><strong>Suitability:</strong> ${data.plan_summary.suitability}</p>
-                <hr>
+            <div class="planner-result-content" style="text-align: left; animation: fadeIn 0.5s ease;">
+                <h3 style="color: var(--primary-color); border-bottom: 2px solid var(--primary-color); padding-bottom: 10px;">
+                    <i class="fas fa-file-invoice"></i> ${data.plan_summary.title}
+                </h3>
+                <p style="font-size: 1.1rem; margin: 15px 0;"><strong>Suitability:</strong> ${data.plan_summary.suitability}</p>
+                
+                <div class="planner-stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+                    <div class="stat-card" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border-left: 4px solid #3498db;">
+                        <span style="display: block; font-size: 0.8rem; opacity: 0.7; text-transform: uppercase;">Estimated Cost</span>
+                        <strong style="font-size: 1.2rem;">${data.cost_and_profit_estimation.total_estimated_cost}</strong>
+                    </div>
+                    <div class="stat-card" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border-left: 4px solid #f1c40f;">
+                        <span style="display: block; font-size: 0.8rem; opacity: 0.7; text-transform: uppercase;">Estimated Yield</span>
+                        <strong style="font-size: 1.2rem;">${data.cost_and_profit_estimation.estimated_yield}</strong>
+                    </div>
+                    <div class="stat-card" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border-left: 4px solid #2ecc71;">
+                        <span style="display: block; font-size: 0.8rem; opacity: 0.7; text-transform: uppercase;">Potential Profit</span>
+                        <strong style="font-size: 1.2rem; color: #2ecc71;">${data.cost_and_profit_estimation.estimated_profit}</strong>
+                    </div>
+                </div>
 
-                <h4>💰 Cost & Profit Estimation</h4>
-                <p><strong>Total Estimated Cost:</strong> ${data.cost_and_profit_estimation.total_estimated_cost}</p>
-                <p><strong>Estimated Yield:</strong> ${data.cost_and_profit_estimation.estimated_yield}</p>
-                <p><strong>Potential Profit:</strong> <strong style="color: green;">${data.cost_and_profit_estimation.estimated_profit}</strong></p>
+                <h4 style="margin-top: 25px;"><i class="fas fa-list-check"></i> Cost Breakdown</h4>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                        <thead>
+                            <tr style="background: rgba(255,255,255,0.1);">
+                                <th style="padding: 10px; text-align: left;">Item</th>
+                                <th style="padding: 10px; text-align: right;">Cost</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.cost_and_profit_estimation.cost_breakdown.map(item => `
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <td style="padding: 10px;">${item.item}</td>
+                                    <td style="padding: 10px; text-align: right; color: var(--electric-blue);">${item.cost}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
 
-                <strong>Cost Breakdown:</strong>
-                <table style="width: 100%; margin-top: 10px; border-collapse: collapse;">
-                    ${data.cost_and_profit_estimation.cost_breakdown.map(item => `
-                        <tr style="border-bottom: 1px solid #eee;">
-                            <td style="padding: 5px;">${item.item}</td>
-                            <td style="padding: 5px; text-align: right;">${item.cost}</td>
-                        </tr>
+                <h4 style="margin-top: 25px;"><i class="fas fa-calendar-days"></i> Step-by-Step Guide (${data.step_by_step_guide.timeline_weeks})</h4>
+                <div class="timeline-v2" style="margin-top: 15px;">
+                    ${data.step_by_step_guide.steps.map((step, idx) => `
+                        <div class="timeline-step" style="margin-bottom: 20px; padding-left: 20px; border-left: 2px solid var(--primary-color); position: relative;">
+                            <div class="step-dot" style="position: absolute; left: -7px; top: 0; width: 12px; height: 12px; background: var(--primary-color); border-radius: 50%;"></div>
+                            <strong style="color: var(--primary-hover);">${step.stage}</strong>
+                            <p style="margin-top: 5px; opacity: 0.9;">${step.action}</p>
+                        </div>
                     `).join('')}
-                </table>
-                <hr>
-
-                <h4>🗓️ Step-by-Step Guide (${data.step_by_step_guide.timeline_weeks})</h4>
-                <ul style="padding-left: 20px;">
-                    ${data.step_by_step_guide.steps.map(step => `
-                        <li style="margin-bottom: 10px;">
-                            <strong>${step.stage}:</strong><br>
-                            ${step.action}
-                        </li>
-                    `).join('')}
-                </ul>
+                </div>
             </div>
         `;
 
                     outputDiv.innerHTML = htmlResult;
+                    outputDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
                 } catch (e) {
-                    outputDiv.innerHTML = `<p style='color: red;'>Error: ${e.message}</p>`;
+                    let friendlyMsg = e.message;
+                    if (friendlyMsg.includes("429") || friendlyMsg.toLowerCase().includes("busy")) {
+                        friendlyMsg = "Google AI is temporarily busy because of many requests. Please wait 1 minute and try again.";
+                    }
+                    outputDiv.innerHTML = `<div class="error-notification" style="color: #ff3e3e; background: rgba(255,0,0,0.1); padding: 15px; border-radius: 8px; border: 1px solid #ff3e3e;">
+                        <i class="fas fa-exclamation-triangle"></i> <strong>Notice:</strong> ${friendlyMsg}
+                    </div>`;
                 } finally {
                     this.showLoadingOverlay(false);
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '💡 Get Perfect Plan';
+                    }
                 }
             },
 
@@ -6849,6 +6936,30 @@
                     overlay.style.opacity = '0';
                     setTimeout(() => overlay.style.display = 'none', 800);
                 }
+
+                // Save preference so we don't ask again
+                localStorage.setItem('fullscreen_prompted', 'true');
+            },
+
+            skipFullscreen: function () {
+                const overlay = document.getElementById('fullscreen-launch-overlay');
+                if (overlay) {
+                    overlay.style.opacity = '0';
+                    setTimeout(() => overlay.style.display = 'none', 800);
+                }
+                // Save preference so we don't ask again
+                localStorage.setItem('fullscreen_prompted', 'true');
+            },
+
+            showFullscreenPrompt: function () {
+                // Only show if user hasn't been prompted before in this session
+                if (localStorage.getItem('fullscreen_prompted') !== 'true') {
+                    const overlay = document.getElementById('fullscreen-launch-overlay');
+                    if (overlay) {
+                        overlay.style.display = 'flex';
+                        overlay.style.opacity = '1';
+                    }
+                }
             },
 
             filterLanguages: function () {
@@ -6861,20 +6972,34 @@
             },
 
             selectLanguage: function (code, name) {
+                // Method 1: Try the Google Translate combo box
                 const combo = document.querySelector('.goog-te-combo');
                 if (combo) {
                     combo.value = code;
                     combo.dispatchEvent(new Event('change'));
-                    document.getElementById('current-lang-label').innerText = name;
-                    this.toggleLangDropdown();
+                }
 
-                    // Save to recent
-                    let recent = JSON.parse(localStorage.getItem('recent_langs') || '[]');
-                    recent = [code, ...recent.filter(c => c !== code)].slice(0, 3);
-                    localStorage.setItem('recent_langs', JSON.stringify(recent));
-                    this.renderLanguageList();
-                } else {
-                    console.warn("Google Translate combo box not found yet.");
+                // Method 2: Set the Google Translate cookie directly (more reliable)
+                // This cookie tells Google Translate which language to use
+                const domain = window.location.hostname;
+                document.cookie = `googtrans=/en/${code}; path=/; domain=${domain}`;
+                document.cookie = `googtrans=/en/${code}; path=/`;
+
+                // Update the UI
+                document.getElementById('current-lang-label').innerText = name;
+                this.toggleLangDropdown();
+
+                // Save to recent
+                let recent = JSON.parse(localStorage.getItem('recent_langs') || '[]');
+                recent = [code, ...recent.filter(c => c !== code)].slice(0, 3);
+                localStorage.setItem('recent_langs', JSON.stringify(recent));
+                this.renderLanguageList();
+
+                // Reload the page if Google Translate combo wasn't found
+                // This ensures the cookie takes effect
+                if (!combo) {
+                    console.log("Reloading page to apply language change...");
+                    window.location.reload();
                 }
             },
 
